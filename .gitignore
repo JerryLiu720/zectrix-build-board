@@ -1,0 +1,14 @@
+config.json
+cache.json
+status.png
+status.png.tmp
+/preview-*.png
+ui_state.txt
+pages.txt
+conn.txt
+force.req
+sdk.zip
+zectrix-local-push-sdk/
+pusher/target/
+__pycache__/
+*.pyc

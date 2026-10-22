@@ -1,0 +1,40 @@
+{
+  "fetched_at": 1792663322.247255,
+  "failures": [
+    {
+      "repo": "JerryLiu720/zectrix-agent-status",
+      "workflow": "build",
+      "branch": "feat/keys",
+      "time": "2026-10-22T07:03:32.247255Z"
+    },
+    {
+      "repo": "JerryLiu720/JerryLiu720.github.io",
+      "workflow": "pages build and deployment",
+      "branch": "main",
+      "time": "2026-10-20T10:03:32.247255Z"
+    }
+  ],
+  "reviews": [
+    {
+      "repo": "JerryLiu720/zectrix-agent-status",
+      "title": "fix: 按键连按丢事件",
+      "author": "alice",
+      "updated": "2026-10-22T09:43:32.247255Z",
+      "number": 12
+    },
+    {
+      "repo": "JerryLiu720/JerryLiu720.github.io",
+      "title": "docs: 补安装说明",
+      "author": "bob",
+      "updated": "2026-10-22T05:03:32.247255Z",
+      "number": 7
+    },
+    {
+      "repo": "JerryLiu720/zectrix-agent-status",
+      "title": "feat: 自适应刷新节奏",
+      "author": "carol",
+      "updated": "2026-10-21T04:03:32.247255Z",
+      "number": 9
+    }
+  ]
+}
