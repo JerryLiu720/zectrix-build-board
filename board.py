@@ -290,12 +290,12 @@ def connected():
 
 
 def header(d, data, title):
-    d.text((16, 9), title, font=font(10, True), fill=DARK)
+    d.text((16, 6), title, font=font(15, True), fill=INK)
     st = "已连接" if connected() else "未连接"
     when = ago(data.get("fetched_at"))
     right = f"{st} · {when}"
-    d.text((W - 16 - d.textlength(right, font=font(10)), 9), right, font=font(10), fill=MID)
-    d.line([(16, 30), (W - 16, 30)], fill=LIGHT, width=1)
+    d.text((W - 16 - d.textlength(right, font=font(10)), 12), right, font=font(10), fill=MID)
+    d.line([(16, 32), (W - 16, 32)], fill=LIGHT, width=1)
 
 
 def footer(d, page, data, extra=""):
@@ -352,18 +352,23 @@ def page_overview(d, data):
 
     # 状态行：第一眼回答「有没有事」
     if nf:
-        d.ellipse([16, 46, 30, 60], fill=INK)
-        status = "需要处理"
+        status, filled = "需要处理", True
     elif running:
-        d.ellipse([16, 46, 30, 60], fill=INK)
-        status = "正在构建"
+        status, filled = "正在构建", True
     elif nr:
-        d.ellipse([16, 46, 30, 60], fill=INK)
-        status = "有 PR 等你"
+        status, filled = "有 PR 等你", True
     else:
-        d.ellipse([16, 46, 30, 60], outline=INK, width=2)
-        status = "一切正常"
-    d.text((40, 40), status, font=font(22, True), fill=INK)
+        status, filled = "一切正常", False
+
+    f_status = font(22, True)
+    d.text((40, 40), status, font=f_status, fill=INK)
+    bbox = d.textbbox((40, 40), status, font=f_status)   # 按实际墨迹算中心
+    cy = (bbox[1] + bbox[3]) / 2
+    r = 7
+    if filled:
+        d.ellipse([23 - r, cy - r, 23 + r, cy + r], fill=INK)
+    else:
+        d.ellipse([23 - r, cy - r, 23 + r, cy + r], outline=INK, width=2)
 
     # 数字摘要：优先 14px，放不下就依次去掉「运行中」、退回 11px
     bits = [f"{nf} 失败", f"{nr} 待评审"]
