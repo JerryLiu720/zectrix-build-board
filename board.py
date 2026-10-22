@@ -134,7 +134,15 @@ def summarize_runs(runs):
             recent.append(concl)
         if concl == "success" and last_success is None:
             last_success = r.get("created_at")
-    return {"running": running, "last_success": last_success, "recent": recent}
+    latest = None
+    if runs:
+        r0 = runs[0]
+        latest = {
+            "conclusion": "running" if (r0.get("status") in ("in_progress", "queued", "waiting")) else (r0.get("conclusion") or "unknown"),
+            "time": r0.get("created_at"),
+            "workflow": r0.get("name") or "workflow",
+        }
+    return {"running": running, "last_success": last_success, "recent": recent, "latest": latest}
 
 
 def search_to_reviews(repo, items):
@@ -152,7 +160,7 @@ def fetch_repo(repo, token, now):
     """返回 (failures, reviews, ok)。"""
     failures, reviews, ok = [], [], True
 
-    summary = {"running": 0, "last_success": None, "recent": []}
+    summary = {"running": 0, "last_success": None, "recent": [], "latest": None}
     try:
         data = api_get(f"/repos/{repo}/actions/runs?per_page=5", token)
         runs = data.get("workflow_runs", [])
@@ -190,12 +198,13 @@ def collect(cfg, token, now=None):
             prev = {}
 
     failures, reviews, all_ok = [], [], True
-    running_total, last_success, recent = 0, None, []
+    running_total, last_success, recent, repo_status = 0, None, [], []
     for repo in cfg["repos"]:
         f_new, r_new, summ, ok = fetch_repo(repo, token, now)
         if ok:
             running_total += summ.get("running", 0)
             recent = recent or summ.get("recent", [])
+            repo_status.append({"repo": repo, "latest": summ.get("latest")})
             ts = summ.get("last_success")
             if ts and (not last_success or _sort_key(ts) > _sort_key(last_success)):
                 last_success = ts
@@ -218,6 +227,7 @@ def collect(cfg, token, now=None):
     data = {"fetched_at": last_ok, "failures": failures, "reviews": reviews,
             "stale": not all_ok, "demo": False,
             "running": running_total, "last_success": last_success, "recent": recent,
+            "repo_status": repo_status,
             # 从没成功过，也没有缓存：不能假装「构建是绿的」
             "unknown": (not all_ok) and not prev.get("fetched_at")}
 
@@ -304,6 +314,30 @@ def footer(d, page, data, extra=""):
     d.text((W - 16 - d.textlength(tag, font=font(10)), 276), tag, font=font(10), fill=MID)
 
 
+def bottom_band(d, data, by=248):
+    d.text((16, by), "最近 5 次", font=font(10), fill=MID)
+    recent = (data.get("recent") or [])[:5]
+    x = 80
+    for c in recent:
+        if c == "success":
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=INK)
+        elif c == "failure":
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=255, outline=INK, width=1)
+            d.line([(x + 2, by + 1), (x + 9, by + 8)], fill=INK, width=1)
+            d.line([(x + 9, by + 1), (x + 2, by + 8)], fill=INK, width=1)
+        elif c == "running":
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=MID)
+        else:
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=FAINT)
+        x += 15
+    if not recent:
+        d.text((80, by), "—", font=font(10), fill=MID)
+    ls = data.get("last_success")
+    if ls:
+        txt = f"上次成功 {ago(ls)}"
+        d.text((W - 16 - d.textlength(txt, font=font(10)), by), txt, font=font(10), fill=MID)
+
+
 def page_overview(d, data):
     header(d, data, "BUILD BOARD")
 
@@ -346,6 +380,26 @@ def page_overview(d, data):
     d.text((W - 16 - d.textlength(sub, font=font(size)), 44 if size == 14 else 46), sub, font=font(size), fill=DARK)
     d.line([(16, 72), (W - 16, 72)], fill=FAINT, width=1)
 
+    # 全绿：改为每仓状态列表，避免大片空白
+    if not nf and not nr:
+        d.text((16, 78), "仓库状态", font=font(10), fill=MID)
+        y = 94
+        for item in (data.get("repo_status") or [])[:4]:
+            name = item["repo"].split("/")[-1]
+            latest = item.get("latest") or {}
+            concl = latest.get("conclusion", "none")
+            label = {"success": "通过", "failure": "失败", "running": "运行中"}.get(concl, "无流水线")
+            d.text((16, y), fit(d, name, 14, 250, True), font=font(14, True), fill=INK)
+            d.text((W - 16 - d.textlength(label, font=font(11)), y + 2), label, font=font(11), fill=DARK)
+            sub = f"{latest.get('workflow', '—')} · {ago(latest.get('time'))}" if latest else "尚未运行过 Actions"
+            d.text((16, y + 15), fit(d, sub, 11, 340), font=font(11), fill=MID)
+            y += 32
+        d.line([(16, y + 4), (W - 16, y + 4)], fill=FAINT, width=1)
+        d.text((16, y + 12), f"关注 {len(data.get('repo_status') or [])} 个仓库", font=font(10), fill=MID)
+        bottom_band(d, data)
+        footer(d, 0, data)
+        return
+
     # 失败
     d.text((16, 78), f"失败 {nf}", font=font(10), fill=MID)
     y = 92
@@ -373,30 +427,7 @@ def page_overview(d, data):
     else:
         d.text((16, y), "没有待评审的 PR", font=font(11), fill=DARK)
 
-    # 底部：最近 5 次 + 上次成功
-    by = 248
-    d.text((16, by), "最近 5 次", font=font(10), fill=MID)
-    recent = (data.get("recent") or [])[:5]
-    x = 80
-    for c in recent:
-        if c == "success":
-            d.rectangle([x, by - 1, x + 11, by + 10], fill=INK)
-        elif c == "failure":
-            d.rectangle([x, by - 1, x + 11, by + 10], fill=255, outline=INK, width=1)
-            d.line([(x + 2, by + 1), (x + 9, by + 8)], fill=INK, width=1)
-            d.line([(x + 9, by + 1), (x + 2, by + 8)], fill=INK, width=1)
-        elif c == "running":
-            d.rectangle([x, by - 1, x + 11, by + 10], fill=MID)
-        else:
-            d.rectangle([x, by - 1, x + 11, by + 10], fill=FAINT)
-        x += 15
-    if not recent:
-        d.text((80, by), "—", font=font(10), fill=MID)
-
-    ls = data.get("last_success")
-    if ls:
-        txt = f"上次成功 {ago(ls)}"
-        d.text((W - 16 - d.textlength(txt, font=font(10)), by), txt, font=font(10), fill=MID)
+    bottom_band(d, data)
 
     footer(d, 0, data)
 

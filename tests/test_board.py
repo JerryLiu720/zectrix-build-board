@@ -61,7 +61,7 @@ class TestSummary(unittest.TestCase):
 
     def test_no_runs(self):
         out = board.summarize_runs([])
-        self.assertEqual(out, {"running": 0, "last_success": None, "recent": []})
+        self.assertEqual(out, {"running": 0, "last_success": None, "recent": [], "latest": None})
 
 
 class TestReviews(unittest.TestCase):
