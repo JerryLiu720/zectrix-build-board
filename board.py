@@ -518,12 +518,12 @@ def daemon(cfg, token):
             if forced:
                 os.remove(FORCE)
 
+            # 确认键：先给回执，再联网
             if forced and last_data is not None:
-                # 立刻给回执：屏幕先显示「正在刷新…」
                 busy = dict(last_data)
                 busy["refreshing"] = True
                 render(page, busy, STATUS_PNG)
-                time.sleep(0.4)
+                time.sleep(0.3)
 
             if demo:
                 if page != last_page or forced:
@@ -531,11 +531,17 @@ def daemon(cfg, token):
                     render(page, fixed, STATUS_PNG)
                     last_data, last_page = fixed, page
                     print(f"推送第 {page + 1} 页（示例数据）", flush=True)
-            elif last_page is None or page != last_page or forced or time.time() - last_fetch >= cfg["interval"]:
-                data, ok = collect(cfg, token)
-                render(page, data, STATUS_PNG)
-                last_data, last_page, last_fetch = data, page, time.time()
-                print(f"推送第 {page + 1} 页（拉取{'成功' if ok else '失败，可能过期'}）", flush=True)
+            else:
+                need_fetch = last_data is None or forced or time.time() - last_fetch >= cfg["interval"]
+                if need_fetch:
+                    data, ok = collect(cfg, token)
+                    last_data, last_fetch = data, time.time()
+                    print(f"拉取{'成功' if ok else '失败，可能过期'}", flush=True)
+                # 翻页只用内存里的上一份数据，不联网
+                if page != last_page or need_fetch:
+                    render(page, last_data, STATUS_PNG)
+                    last_page = page
+                    print(f"推送第 {page + 1} 页", flush=True)
         except Exception as e:
             print(f"循环异常：{e}", file=sys.stderr, flush=True)
         time.sleep(0.3)

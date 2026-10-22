@@ -106,7 +106,7 @@ async fn main() {
     };
 
     // 持续监听文件变化：按键、刷新回执、定时更新都会走到这里
-    let mut ticker = tokio::time::interval(Duration::from_millis(600));
+    let mut ticker = tokio::time::interval(Duration::from_millis(250));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
