@@ -43,7 +43,7 @@ KEYCHAIN_SERVICE = "zectrix-build-board"
 WEEK = 7 * 86400
 API = "https://api.github.com"
 
-INK, DARK, MID, LIGHT, FAINT = 0, 70, 110, 190, 235
+INK, DARK, MID, LIGHT, FAINT = 0, 45, 85, 140, 225
 
 
 # ---------------- 数据 ----------------
@@ -118,6 +118,25 @@ def runs_to_failures(repo, runs, now=None):
     return out
 
 
+def summarize_runs(runs):
+    """从最近几次运行里提取：运行中数量、上次成功时间、结论序列。"""
+    running = 0
+    last_success = None
+    recent = []
+    for r in runs:
+        status = r.get("status") or ""
+        concl = r.get("conclusion") or ""
+        if status in ("in_progress", "queued", "waiting", "requested", "pending"):
+            running += 1
+            recent.append("running")
+            continue
+        if concl:
+            recent.append(concl)
+        if concl == "success" and last_success is None:
+            last_success = r.get("created_at")
+    return {"running": running, "last_success": last_success, "recent": recent}
+
+
 def search_to_reviews(repo, items):
     """纯函数：把 search/issues 的结果整理成待评审列表。"""
     return [{
@@ -133,9 +152,12 @@ def fetch_repo(repo, token, now):
     """返回 (failures, reviews, ok)。"""
     failures, reviews, ok = [], [], True
 
+    summary = {"running": 0, "last_success": None, "recent": []}
     try:
         data = api_get(f"/repos/{repo}/actions/runs?per_page=5", token)
-        failures = runs_to_failures(repo, data.get("workflow_runs", []), now)
+        runs = data.get("workflow_runs", [])
+        failures = runs_to_failures(repo, runs, now)
+        summary = summarize_runs(runs)
     except Exception:
         ok = False
 
@@ -146,7 +168,7 @@ def fetch_repo(repo, token, now):
     except Exception:
         ok = False
 
-    return failures, reviews, ok
+    return failures, reviews, summary, ok
 
 
 def _sort_key(ts):
@@ -168,9 +190,15 @@ def collect(cfg, token, now=None):
             prev = {}
 
     failures, reviews, all_ok = [], [], True
+    running_total, last_success, recent = 0, None, []
     for repo in cfg["repos"]:
-        f_new, r_new, ok = fetch_repo(repo, token, now)
+        f_new, r_new, summ, ok = fetch_repo(repo, token, now)
         if ok:
+            running_total += summ.get("running", 0)
+            recent = recent or summ.get("recent", [])
+            ts = summ.get("last_success")
+            if ts and (not last_success or _sort_key(ts) > _sort_key(last_success)):
+                last_success = ts
             failures += f_new
             reviews += r_new
         else:
@@ -189,6 +217,7 @@ def collect(cfg, token, now=None):
     last_ok = now if all_ok else prev.get("fetched_at")
     data = {"fetched_at": last_ok, "failures": failures, "reviews": reviews,
             "stale": not all_ok, "demo": False,
+            "running": running_total, "last_success": last_success, "recent": recent,
             # 从没成功过，也没有缓存：不能假装「构建是绿的」
             "unknown": (not all_ok) and not prev.get("fetched_at")}
 
@@ -262,7 +291,9 @@ def header(d, data, title):
 def footer(d, page, data, extra=""):
     d.line([(16, 268), (W - 16, 268)], fill=LIGHT, width=1)
     left = "↑↓ 翻页 · 确认键刷新"
-    if data.get("unknown"):
+    if data.get("refreshing"):
+        left = "正在刷新…"
+    elif data.get("unknown"):
         left = "尚未获取到数据 · 确认键重试"
     elif data.get("stale"):
         left = "数据可能过期 · 确认键重试"
@@ -275,7 +306,6 @@ def footer(d, page, data, extra=""):
 
 def page_overview(d, data):
     header(d, data, "BUILD BOARD")
-    nf, nr = len(data["failures"]), len(data["reviews"])
 
     if data.get("unknown"):
         d.text((16, 64), "数据暂时不可用", font=font(24, True), fill=INK)
@@ -283,37 +313,90 @@ def page_overview(d, data):
         footer(d, 0, data)
         return
 
-    if nf:
-        d.text((16, 48), "构建失败", font=font(11), fill=MID)
-        d.text((16, 64), f"{nf} 条", font=font(34, True), fill=INK)
-        f = data["failures"][0]
-        d.text((130, 66), fit(d, f["repo"], 14, 250, True), font=font(14, True), fill=INK)
-        d.text((130, 86), fit(d, f"{f['workflow']} · {f['branch']}", 10, 250), font=font(10), fill=MID)
-        d.text((130, 100), ago(f["time"]), font=font(10), fill=LIGHT)
-    elif nr:
-        d.text((16, 48), "待评审", font=font(11), fill=MID)
-        d.text((16, 64), f"{nr} 个 PR", font=font(30, True), fill=INK)
-    else:
-        d.text((16, 60), "构建是绿的", font=font(26, True), fill=INK)
-        d.text((16, 96), "没有待评审", font=font(11), fill=MID)
+    nf, nr = len(data["failures"]), len(data["reviews"])
+    running = data.get("running", 0)
 
-    # 第二块信息
-    d.line([(16, 150), (W - 16, 150)], fill=LIGHT, width=1)
-    if nf and nr:
-        d.text((16, 162), "待评审", font=font(10), fill=MID)
-        d.text((16, 176), f"{nr} 个 PR", font=font(20, True), fill=INK)
-        r = data["reviews"][0]
-        d.text((16, 204), fit(d, r["title"], 11, 368), font=font(11), fill=DARK)
-        d.text((16, 220), f"{r['author']} · {ago(r['updated'])}", font=font(10), fill=LIGHT)
-    elif nf:
-        d.text((16, 164), "没有待评审的 PR", font=font(11), fill=MID)
+    # 状态行：第一眼回答「有没有事」
+    if nf:
+        d.ellipse([16, 46, 30, 60], fill=INK)
+        status = "需要处理"
+    elif running:
+        d.ellipse([16, 46, 30, 60], fill=INK)
+        status = "正在构建"
     elif nr:
-        r = data["reviews"][0]
-        d.text((16, 130), "最新一条", font=font(10), fill=MID)
-        d.text((16, 144), fit(d, r["title"], 11, 368), font=font(11), fill=DARK)
-        d.text((16, 160), f"{r['repo']} · {r['author']} · {ago(r['updated'])}", font=font(10), fill=LIGHT)
+        d.ellipse([16, 46, 30, 60], fill=INK)
+        status = "有 PR 等你"
     else:
-        d.text((16, 164), "最近 7 天没有失败的 Actions", font=font(11), fill=MID)
+        d.ellipse([16, 46, 30, 60], outline=INK, width=2)
+        status = "一切正常"
+    d.text((40, 40), status, font=font(22, True), fill=INK)
+
+    # 数字摘要：优先 14px，放不下就依次去掉「运行中」、退回 11px
+    bits = [f"{nf} 失败", f"{nr} 待评审"]
+    if running:
+        bits.append(f"{running} 运行中")
+    sub_x = 40 + d.textlength(status, font=font(22, True)) + 14
+    avail = W - 16 - sub_x
+    sub, size = " · ".join(bits), 14
+    if d.textlength(sub, font=font(size)) > avail:
+        bits = bits[:2]
+        sub = " · ".join(bits)
+    if d.textlength(sub, font=font(size)) > avail:
+        size = 11
+    d.text((W - 16 - d.textlength(sub, font=font(size)), 44 if size == 14 else 46), sub, font=font(size), fill=DARK)
+    d.line([(16, 72), (W - 16, 72)], fill=FAINT, width=1)
+
+    # 失败
+    d.text((16, 78), f"失败 {nf}", font=font(10), fill=MID)
+    y = 92
+    if nf:
+        for f in data["failures"][:2]:
+            d.text((16, y), fit(d, f["repo"].split("/")[-1], 14, 290, True), font=font(14, True), fill=INK)
+            d.text((W - 16 - d.textlength(ago(f["time"]), font=font(10)), y + 2), ago(f["time"]), font=font(10), fill=MID)
+            d.text((16, y + 14), fit(d, f"{f['workflow']} · {f['branch']}", 11, 340), font=font(11), fill=MID)
+            y += 30
+    else:
+        d.text((16, y), "最近 7 天没有失败的 Actions", font=font(11), fill=DARK)
+        y += 22
+
+    # 待评审
+    y = max(y + 6, 160)
+    d.line([(16, y - 6), (W - 16, y - 6)], fill=FAINT, width=1)
+    d.text((16, y), f"待评审 {nr}", font=font(10), fill=MID)
+    y += 14
+    if nr:
+        for r in data["reviews"][:2]:
+            d.text((16, y), fit(d, f"#{r.get('number', '?')} {r['title']}", 14, 300, True), font=font(14, True), fill=INK)
+            d.text((W - 16 - d.textlength(ago(r["updated"]), font=font(10)), y + 2), ago(r["updated"]), font=font(10), fill=MID)
+            d.text((16, y + 14), fit(d, f"{r['repo'].split('/')[-1]} · {r['author']}", 11, 340), font=font(11), fill=MID)
+            y += 30
+    else:
+        d.text((16, y), "没有待评审的 PR", font=font(11), fill=DARK)
+
+    # 底部：最近 5 次 + 上次成功
+    by = 248
+    d.text((16, by), "最近 5 次", font=font(10), fill=MID)
+    recent = (data.get("recent") or [])[:5]
+    x = 80
+    for c in recent:
+        if c == "success":
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=INK)
+        elif c == "failure":
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=255, outline=INK, width=1)
+            d.line([(x + 2, by + 1), (x + 9, by + 8)], fill=INK, width=1)
+            d.line([(x + 9, by + 1), (x + 2, by + 8)], fill=INK, width=1)
+        elif c == "running":
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=MID)
+        else:
+            d.rectangle([x, by - 1, x + 11, by + 10], fill=FAINT)
+        x += 15
+    if not recent:
+        d.text((80, by), "—", font=font(10), fill=MID)
+
+    ls = data.get("last_success")
+    if ls:
+        txt = f"上次成功 {ago(ls)}"
+        d.text((W - 16 - d.textlength(txt, font=font(10)), by), txt, font=font(10), fill=MID)
 
     footer(d, 0, data)
 
@@ -337,11 +420,11 @@ def page_detail(d, data):
     shown = rows[:6]
     y = 42
     for kind, line1, line2 in shown:
-        d.text((16, y + 2), kind, font=font(10, True), fill=INK if kind == "失败" else MID)
-        d.text((50, y), fit(d, line1, 14, 334, True), font=font(14, True), fill=INK)
-        d.text((50, y + 17), fit(d, line2, 10, 334), font=font(10), fill=MID)
-        d.line([(50, y + 30), (W - 16, y + 30)], fill=FAINT, width=1)
-        y += 34
+        d.text((16, y + 2), kind, font=font(11, True), fill=INK if kind == "失败" else MID)
+        d.text((50, y), fit(d, line1, 15, 334, True), font=font(15, True), fill=INK)
+        d.text((50, y + 18), fit(d, line2, 11, 334), font=font(11), fill=MID)
+        d.line([(50, y + 32), (W - 16, y + 32)], fill=FAINT, width=1)
+        y += 36
 
     rest = len(rows) - len(shown)
     if rest > 0:
@@ -385,13 +468,13 @@ def preview(data):
 
 
 def daemon(cfg, token):
-    """示例模式也要响应翻页；正式模式按 interval 重拉。"""
+    """示例模式也要响应翻页；确认键先给回执再拉数据。"""
     demo = not cfg["repos"] or not token
     fixed = load_fixture() if demo else None
     if demo:
         print("无 token 或无仓库：使用示例数据（不访问网络）", flush=True)
 
-    last_page, last_fetch = None, 0.0
+    last_page, last_fetch, last_data = None, 0.0, fixed
     while True:
         try:
             page = int(open(STATE).read().strip()) if os.path.exists(STATE) else 0
@@ -399,15 +482,23 @@ def daemon(cfg, token):
             if forced:
                 os.remove(FORCE)
 
+            if forced and last_data is not None:
+                # 立刻给回执：屏幕先显示「正在刷新…」
+                busy = dict(last_data)
+                busy["refreshing"] = True
+                render(page, busy, STATUS_PNG)
+                time.sleep(0.4)
+
             if demo:
                 if page != last_page or forced:
+                    fixed.pop("refreshing", None)
                     render(page, fixed, STATUS_PNG)
-                    last_page = page
+                    last_data, last_page = fixed, page
                     print(f"推送第 {page + 1} 页（示例数据）", flush=True)
             elif last_page is None or page != last_page or forced or time.time() - last_fetch >= cfg["interval"]:
                 data, ok = collect(cfg, token)
                 render(page, data, STATUS_PNG)
-                last_page, last_fetch = page, time.time()
+                last_data, last_page, last_fetch = data, page, time.time()
                 print(f"推送第 {page + 1} 页（拉取{'成功' if ok else '失败，可能过期'}）", flush=True)
         except Exception as e:
             print(f"循环异常：{e}", file=sys.stderr, flush=True)

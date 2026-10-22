@@ -46,6 +46,24 @@ class TestFailures(unittest.TestCase):
                            board._sort_key(items[-1]["time"]))
 
 
+class TestSummary(unittest.TestCase):
+    def test_counts_running_and_last_success(self):
+        runs = [
+            {"status": "in_progress", "conclusion": None, "created_at": iso(60)},
+            {"status": "completed", "conclusion": "success", "created_at": iso(600)},
+            {"status": "completed", "conclusion": "failure", "created_at": iso(1200)},
+        ]
+        out = board.summarize_runs(runs)
+        self.assertEqual(out["running"], 1)
+        self.assertEqual(out["recent"][0], "running")
+        self.assertEqual(out["recent"][1], "success")
+        self.assertIsNotNone(out["last_success"])
+
+    def test_no_runs(self):
+        out = board.summarize_runs([])
+        self.assertEqual(out, {"running": 0, "last_success": None, "recent": []})
+
+
 class TestReviews(unittest.TestCase):
     def test_maps_fields(self):
         items = [{"title": "fix: x", "number": 3, "updated_at": iso(600),

@@ -1,9 +1,10 @@
 //! 只负责推图与按键的本地程序（不做自动重连）。
+//! 持续监听 PNG 变化：翻页、刷新、定时更新都会自动上屏。
 //! 用法：build-board-pusher <IP 或设备 ID> <PNG 路径>
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use zectrix_sdk::{Device, Event, ImageFormat, Key, KeyAction, OpenOptions};
@@ -32,40 +33,21 @@ fn read_u32(path: &Path, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
-async fn push(device: &Device, png: &Path) -> Option<u64> {
-    let bytes = match fs::read(png) {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("读取图片失败：{e}");
-            return None;
-        }
-    };
+/// 推送一帧；失败不重试（ResultUnknown 不等于失败），等下次内容变化自然再推
+async fn push(device: &Device, bytes: Vec<u8>) -> Option<u64> {
+    if bytes.is_empty() {
+        return None;
+    }
     match device.show_with_format(&bytes, ImageFormat::Gray16).await {
         Ok(_) => {
             println!("已推送 {} 字节", bytes.len());
             Some(fingerprint(&bytes))
         }
         Err(e) => {
-            // ResultUnknown 等情况不重推，交由下一次内容变化时自然重试
             eprintln!("推送失败（不重试）：{e}");
             None
         }
     }
-}
-
-/// 等渲染器写出新画面；超时返回当前指纹
-async fn wait_change(png: &Path, old: u64, timeout: Duration) -> u64 {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        if let Ok(b) = fs::read(png) {
-            let fp = fingerprint(&b);
-            if fp != old {
-                return fp;
-            }
-        }
-    }
-    old
 }
 
 #[tokio::main]
@@ -117,57 +99,60 @@ async fn main() {
         });
     }
 
-    let mut last_fp = push(&device, &png).await.unwrap_or(0);
+    // 首推
+    let mut last_fp = match fs::read(&png) {
+        Ok(bytes) => push(&device, bytes).await.unwrap_or(0),
+        Err(_) => 0,
+    };
+
+    // 持续监听文件变化：按键、刷新回执、定时更新都会走到这里
+    let mut ticker = tokio::time::interval(Duration::from_millis(600));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
-        match device.next_event().await {
-            Ok(Some(Event::Key { key, action })) => {
-                let mut pending = false;
-                match (action, key) {
-                    (KeyAction::Short, Key::Up) => {
-                        page = (page + pages - 1) % pages;
-                        let _ = fs::write(&state, page.to_string());
-                        pending = true;
-                    }
-                    (KeyAction::Short, Key::Down) => {
-                        page = (page + 1) % pages;
-                        let _ = fs::write(&state, page.to_string());
-                        pending = true;
-                    }
-                    (KeyAction::Short, Key::Confirm) | (KeyAction::Long, Key::Confirm) => {
-                        let _ = fs::write(&force, "1");
-                        pending = true;
-                    }
-                    _ => {}
-                }
-                if pending {
-                    // 翻页要立刻出图；确认键要等重新拉取，给更长时间
-                    let wait = if key == Key::Confirm {
-                        Duration::from_secs(15)
-                    } else {
-                        Duration::from_secs(6)
-                    };
-                    let fp = wait_change(&png, last_fp, wait).await;
-                    if fp != last_fp {
-                        last_fp = push(&device, &png).await.unwrap_or(fp);
+        tokio::select! {
+            ev = device.next_event() => {
+                match ev {
+                    Ok(Some(Event::Key { key, action })) => {
+                        match (action, key) {
+                            (KeyAction::Short, Key::Up) => {
+                                page = (page + pages - 1) % pages;
+                                let _ = fs::write(&state, page.to_string());
+                            }
+                            (KeyAction::Short, Key::Down) => {
+                                page = (page + 1) % pages;
+                                let _ = fs::write(&state, page.to_string());
+                            }
+                            (KeyAction::Short, Key::Confirm) | (KeyAction::Long, Key::Confirm) => {
+                                let _ = fs::write(&force, "1");
+                            }
+                            _ => {}
+                        }
                         println!("按键 {:?} → 第 {} 页", key, page + 1);
-                    } else {
-                        eprintln!("按键后没有新画面（超时）");
+                    }
+                    Ok(Some(Event::Disconnected { .. })) => {
+                        eprintln!("设备已断开，退出（不自动重连）");
+                        break;
+                    }
+                    Ok(None) => {
+                        eprintln!("事件流结束，退出");
+                        break;
+                    }
+                    Ok(Some(_)) => {}
+                    Err(e) => {
+                        eprintln!("读取事件失败：{e}");
+                        break;
                     }
                 }
             }
-            Ok(Some(Event::Disconnected { .. })) => {
-                eprintln!("设备已断开，退出（不自动重连）");
-                break;
-            }
-            Ok(None) => {
-                eprintln!("事件流结束，退出");
-                break;
-            }
-            Ok(Some(_)) => {}
-            Err(e) => {
-                eprintln!("读取事件失败：{e}");
-                break;
+            _ = ticker.tick() => {
+                if let Ok(bytes) = fs::read(&png) {
+                    if fingerprint(&bytes) != last_fp {
+                        if let Some(fp) = push(&device, bytes).await {
+                            last_fp = fp;
+                        }
+                    }
+                }
             }
         }
     }
