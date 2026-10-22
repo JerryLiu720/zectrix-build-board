@@ -34,7 +34,7 @@ Token 只从环境变量 `GITHUB_TOKEN` 或 macOS 钥匙串（服务名 `zectrix
 ## 安装
 
 ```bash
-git clone <本仓库>
+git clone git@github.com:JerryLiu720/zectrix-build-board.git
 cd zectrix-build-board
 ./install.sh
 ```
@@ -71,7 +71,7 @@ python3 board.py --daemon
 把下面这段交给电脑上的 AI（Claude Code / Codex / Cursor 均可）：
 
 ```
-请在本机安装 GitHub 仓库 <owner>/zectrix-build-board。
+请在本机安装 GitHub 仓库 JerryLiu720/zectrix-build-board。
 
 1. 先读 README 与 install.sh，确认它只需要 Python 3 + Pillow + Rust，
    不会刷写设备固件、不会注册开机自启、不会自动推送。
